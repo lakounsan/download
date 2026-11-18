@@ -10,12 +10,20 @@ Features:
    - Authenticated Suno Studio API (using SUNO_COOKIE or SUNO_TOKEN from .env)
    - OpenGraph HTML metadata extraction (og:audio, og:title, og:image)
    - Direct Suno CDN UUID fallback (cdn1.suno.ai / cdn2.suno.ai)
-3. Validates file size against Telegram's 50 MB bot upload limit.
-4. Sends the MP3 audio file back to the user with title, performer, and cover art thumbnail.
+3. Supports full package download (/full) including MP3, Video MP4, and Lyrics.
+4. Supports full Playlist and batch URL downloads.
+5. Includes a lightweight health-check server for cloud deployments (e.g., Render).
 
 Requirements:
     pip install python-telegram-bot>=20.0 httpx beautifulsoup4 python-dotenv
 """
+
+import io
+import logging
+import os
+import re
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, List, Optional
 
 import httpx
@@ -176,6 +184,42 @@ async def fetch_playlist_urls(playlist_id: str) -> List[str]:
     except Exception as exc:
         logger.error("Failed to fetch playlist %s: %s", playlist_id, exc)
     return []
+
+
+async def fetch_suno_metadata(url: str) -> Optional[Dict[str, Optional[str]]]:
+    """
+    Resolves a Suno URL (public, unlisted, or private) and extracts track metadata
+    using:
+      1. Authenticated / Public Suno Studio API
+      2. OpenGraph HTML tags (og:audio, og:title, og:image)
+      3. Direct Suno CDN UUID fallback
+    """
+    headers = build_suno_headers()
+    initial_uuid = extract_uuid(url)
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            # Step 1: Try Suno Studio API directly if UUID is already known
+            if initial_uuid:
+                api_meta = await fetch_from_suno_api(client, initial_uuid, headers)
+                if api_meta:
+                    return api_meta
+
+            # Step 2: Fetch the web page (also resolves /s/<short_id> redirects)
+            response = await client.get(url, headers=headers)
+            resolved_url = str(response.url)
+            resolved_uuid = extract_uuid(resolved_url) or initial_uuid
+
+            # Retry Studio API if redirect revealed the full UUID
+            if resolved_uuid and resolved_uuid != initial_uuid:
+                api_meta = await fetch_from_suno_api(client, resolved_uuid, headers)
+                if api_meta:
+                    return api_meta
+
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
+                og_audio = soup.find("meta", property="og:audio")
+                og_title = soup.find("meta", property="og:title")
                 og_image = soup.find("meta", property="og:image")
 
                 audio_url = (
@@ -279,224 +323,43 @@ async def download_binary(url: str) -> Optional[io.BytesIO]:
 
 
 # ---------------------------------------------------------------------------
-# Telegram Command & Message Handlers
+# Application Entry Point & Render Health Check
 # ---------------------------------------------------------------------------
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the /start command."""
-    if not update.message:
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler so Render Web Services detect an open port."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Suno Telegram Bot is running.")
+
+    def log_message(self, format: str, *args: object) -> None:
+        return  # Suppress noisy health-check access logs
+
+
+def start_health_server() -> None:
+    """Starts a background HTTP server if the PORT environment variable is set."""
+    port_str = os.getenv("PORT", "").strip()
+    if not port_str.isdigit():
         return
-    welcome_text = (
-        "👋 *សូមស្វាគមន៍មកកាន់ Suno Music Downloader Bot!*\n\n"
-        "🎵 *មុខងារទាញយកពេញលេញ (Full Download)៖*\n"
-        "• ផ្ញើតំណភ្ជាប់ចម្រៀង (`/song/...` ឬ `/s/...`) ដើម្បីទាញយក MP3 ពេញ\n"
-        "• ប្រើ `/full <link>` ដើម្បីទាញយកទាំង *MP3 + Video MP4 + អត្ថបទចម្រៀង (Lyrics)*\n"
-        "• ផ្ញើតំណភ្ជាប់ *Playlist* (`/playlist/...`) ឬតំណភ្ជាប់ច្រើនបទព្រមគ្នា\n"
-        "• គាំទ្រទាំងចម្រៀង *Public*, *Unlisted* និង *Private*"
-    )
-    await update.message.reply_text(welcome_text, parse_mode="Markdown")
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the /help command."""
-    if not update.message:
-        return
-    help_text = (
-        "ℹ️ *របៀបប្រើប្រាស់ Bot៖*\n"
-        "1. **ទាញយកបទចម្រៀងធម្មតា៖** ផ្ញើតំណភ្ជាប់ `https://suno.com/song/...`\n"
-        "2. **ទាញយកពេញឈុត (Full Package)៖** វាយ `/full https://suno.com/song/...` ដើម្បីទទួលបាន MP3, Video MP4 និង Lyrics\n"
-        "3. **ទាញយក Playlist ទាំងមូល៖** ផ្ញើតំណភ្ជាប់ `https://suno.com/playlist/...`\n\n"
-        "🔐 *សម្រាប់ចម្រៀង Private តឹងរ៉ឹង៖*\n"
-        "កំណត់ `SUNO_COOKIE` ឬ `SUNO_TOKEN` នៅក្នុងឯកសារ `.env`។"
-    )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-
-async def process_single_track(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    suno_url: str,
-    full_package: bool = False,
-) -> bool:
-    """Downloads and sends a single Suno track (and optionally its video + lyrics)."""
-    if not update.message:
-        return False
-
-    status_msg = await update.message.reply_text(
-        f"🔍 កំពុងស្វែងរកព័ត៌មានចម្រៀង...\n`{suno_url}`",
-        parse_mode="Markdown",
-    )
-
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VOICE
-    )
-
-    metadata = await fetch_suno_metadata(suno_url)
-    if not metadata or not metadata.get("audio_url"):
-        await status_msg.edit_text(
-            f"❌ មិនអាចទាញយកចម្រៀងពីតំណភ្ជាប់នេះបានទេ៖\n`{suno_url}`",
-            parse_mode="Markdown",
-        )
-        return False
-
-    title = metadata["title"] or "Suno AI Track"
-    audio_url = metadata["audio_url"]
-    video_url = metadata.get("video_url")
-    image_url = metadata.get("image_url")
-    lyrics = metadata.get("lyrics") or ""
-    tags = metadata.get("tags") or ""
-
-    await status_msg.edit_text(f"⬇️ កំពុងទាញយកបទពេញ *{title}*...", parse_mode="Markdown")
-
-    audio_buffer = await download_binary(audio_url)
-    if not audio_buffer:
-        await status_msg.edit_text(
-            f"❌ បរាជ័យក្នុងការទាញយកសំឡេងបទ *{title}* (ទំហំអាចលើសពី {MAX_FILE_SIZE_MB}MB)។",
-            parse_mode="Markdown",
-        )
-        return False
-
-    thumb_buffer = await download_binary(image_url) if image_url else None
-    safe_name = sanitize_filename(title)
-
-    caption_lines = [f"🎵 *{title}*"]
-    if tags:
-        caption_lines.append(f"🏷 Style: `{tags[:120]}`")
-    caption_lines.append(f"🔗 [តំណភ្ជាប់ដើម]({suno_url})")
-
-    try:
-        await update.message.reply_audio(
-            audio=audio_buffer,
-            filename=f"{safe_name}.mp3",
-            title=title,
-            performer="Suno AI",
-            thumbnail=thumb_buffer,
-            caption="\n".join(caption_lines),
-            parse_mode="Markdown",
-        )
-
-        # If /full mode is requested, also download & send Video MP4 and full Lyrics
-        if full_package:
-            if video_url:
-                await status_msg.edit_text(
-                    f"🎬 កំពុងទាញយកវីដេអូ MP4 សម្រាប់បទ *{title}*...",
-                    parse_mode="Markdown",
-                )
-                video_buffer = await download_binary(video_url)
-                if video_buffer:
-                    await update.message.reply_video(
-                        video=video_buffer,
-                        filename=f"{safe_name}.mp4",
-                        caption=f"🎬 *{title}* (Full Video)",
-                        parse_mode="Markdown",
-                    )
-
-            if lyrics:
-                lyrics_text = f"📜 *អត្ថបទចម្រៀង (Lyrics) - {title}:*\n\n{lyrics}"
-                # Telegram text message limit is 4096 characters
-                for i in range(0, len(lyrics_text), 4000):
-                    await update.message.reply_text(lyrics_text[i : i + 4000])
-
-        await status_msg.delete()
-        return True
-    except Exception as exc:
-        logger.error("Error sending media via Telegram: %s", exc)
-        await status_msg.edit_text("❌ មានបញ្ហាក្នុងការផ្ញើឯកសារទៅកាន់ Telegram។")
-        return False
-
-
-async def full_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles /full <url> command to download MP3 + Video MP4 + Lyrics."""
-    if not update.message:
-        return
-
-    raw_text = " ".join(context.args) if context.args else ""
-    urls = SUNO_URL_PATTERN.findall(raw_text)
-    if not urls:
-        await update.message.reply_text(
-            "⚠️ សូមភ្ជាប់តំណភ្ជាប់ Suno ជាមួយពាក្យបញ្ជា `/full`\n"
-            "ឧទាហរណ៍៖ `/full https://suno.com/song/...`",
-            parse_mode="Markdown",
-        )
-        return
-
-    await handle_urls_batch(update, context, urls, full_package=True)
-
-
-async def handle_urls_batch(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    raw_urls: List[str],
-    full_package: bool = False,
-) -> None:
-    """Expands playlist URLs and processes one or multiple Suno song URLs."""
-    if not update.message:
-        return
-
-    expanded_urls: List[str] = []
-    for url in raw_urls:
-        playlist_match = SUNO_PLAYLIST_PATTERN.search(url)
-        if playlist_match:
-            playlist_id = playlist_match.group(1)
-            info_msg = await update.message.reply_text(
-                "📂 កំពុងទាញយកបញ្ជីចម្រៀងពី Playlist..."
-            )
-            playlist_songs = await fetch_playlist_urls(playlist_id)
-            await info_msg.delete()
-            if playlist_songs:
-                expanded_urls.extend(playlist_songs)
-            else:
-                await update.message.reply_text(
-                    "⚠️ មិនអាចទាញយកចម្រៀងពី Playlist នេះបានទេ (សូមពិនិត្យមើលថា Playlist ជា Public ឬបានដាក់ `SUNO_COOKIE`)។",
-                    parse_mode="Markdown",
-                )
-        else:
-            expanded_urls.append(url)
-
-    # Deduplicate while preserving order
-    unique_urls = list(dict.fromkeys(expanded_urls))[:MAX_BATCH_TRACKS]
-    if not unique_urls:
-        return
-
-    if len(unique_urls) > 1:
-        await update.message.reply_text(
-            f"🎶 រកឃើញចម្រៀងចំនួន *{len(unique_urls)}* បទ។ កំពុងចាប់ផ្តើមទាញយកទាំងអស់...",
-            parse_mode="Markdown",
-        )
-
-    for song_url in unique_urls:
-        await process_single_track(update, context, song_url, full_package=full_package)
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Scans incoming text messages for one or more Suno URLs (songs or playlists)."""
-    if not update.message or not update.message.text:
-        return
-
-    urls = SUNO_URL_PATTERN.findall(update.message.text)
-    if not urls:
-        await update.message.reply_text(
-            "⚠️ សូមផ្ញើតំណភ្ជាប់ចម្រៀង ឬ Playlist ពី Suno ដែលត្រឹមត្រូវ "
-            "(ឧទាហរណ៍៖ `https://suno.com/song/...`)។",
-            parse_mode="Markdown",
-        )
-        return
-
-    await handle_urls_batch(update, context, urls, full_package=False)
-
-
-# ---------------------------------------------------------------------------
-# Application Entry Point
-# ---------------------------------------------------------------------------
+    port = int(port_str)
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health check HTTP server listening on port %d", port)
 
 
 def main() -> None:
     """Initializes and starts the Telegram bot using long polling."""
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
         raise ValueError(
-            "សូមកំណត់ TELEGRAM_BOT_TOKEN របស់អ្នកនៅក្នុងឯកសារ .env ជាមុនសិន!"
+            "សូមកំណត់ TELEGRAM_BOT_TOKEN របស់អ្នកនៅក្នុងឯកសារ .env ឬ Render Environment Variables ជាមុនសិន!"
         )
+
+    start_health_server()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
