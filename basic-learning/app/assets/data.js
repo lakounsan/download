@@ -13,7 +13,7 @@ const CONSONANTS = [
   { l: "ង", word: "ងូតទឹក",   emoji: "🚿", en: "Bathing" },
   { l: "ច", word: "ចាប",      emoji: "🐦", en: "Bird" },
   { l: "ឆ", word: "ឆ្មា",     emoji: "🐈", en: "Cat" },
-  { l: "ជ", word: "ជ្រូក",     emoji: "🐖", en: "Pig" },
+  { l: "ជ", word: "ជ្រូក",    emoji: "🐖", en: "Pig" },
   { l: "ឈ", word: "ឈើ",      emoji: "🪵", en: "Wood" },
   { l: "ញ", word: "ញ៉ាំ",     emoji: "🍜", en: "Eating" },
   { l: "ដ", word: "ដំរី",     emoji: "🐘", en: "Elephant" },
