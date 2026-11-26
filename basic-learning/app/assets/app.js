@@ -1,6 +1,7 @@
 /* =====================================================
-   ថ្នាក់មូលដ្ឋាន — BasicLearning app logic (v1.1)
-   ថ្មី៖ ពិភពជុំវិញ • ល្បែងចងចាំ • មេដាយ • ការកំណត់ • ថ្ងៃជាប់ៗ
+   ថ្នាក់មូលដ្ឋាន — BasicLearning app logic (v1.2)
+   ថ្មី v1.2៖ សម្លេងអានខ្មែរពេលបើកមេរៀន (TTS bundled MP3)
+   v1.1៖ ពិភពជុំវិញ • ល្បែងចងចាំ • មេដាយ • ការកំណត់ • ថ្ងៃជាប់ៗ
    ===================================================== */
 "use strict";
 
@@ -202,6 +203,38 @@ function buzz(ms) {
   } catch (e) { /* ignore */ }
 }
 
+/* ---------------- speech (សម្លេងអាន, v1.2) ----------------
+   សម្លេងអានខ្មែរ៖ ថតសម្លេងពិត MP3 ដាក់ក្នុង assets/audio/
+   លេងដោយស្វ័យប្រវត្តិពេលបើកមេរៀន និងពេលចុចលើធាតុ */
+let speechEl = null;
+
+function stopSpeak() {
+  if (speechEl) {
+    try { speechEl.onended = null; speechEl.pause(); speechEl.src = ""; } catch (e) { /* ignore */ }
+    speechEl = null;
+  }
+}
+
+function speakSeq(files) {
+  if (!soundOn || !files || !files.length) return;
+  stopSpeak();
+  try {
+    const el = new Audio(files[0]);
+    speechEl = el;
+    el.onended = function () {
+      if (speechEl === el) speakSeq(files.slice(1));
+    };
+    const p = el.play();
+    if (p && p.catch) p.catch(function () { /* playback blocked — ignore */ });
+  } catch (e) { /* ignore */ }
+}
+
+/* speak("audio/km/num01.mp3") or speak(["a.mp3", "b.mp3"]) */
+function speak(x) {
+  if (!x) return;
+  if (typeof x === "string") speakSeq([x]); else speakSeq(x);
+}
+
 document.addEventListener("touchstart", ensureAudio, { passive: true });
 document.addEventListener("mousedown", ensureAudio);
 
@@ -267,7 +300,8 @@ const SUBJECTS = {
     en: "Khmer Letters",
     icon: "ក",
     art: "ក ខ គ",
-    color: "kh"
+    color: "kh",
+    say: "audio/km/subject_kh.mp3"
   },
   math: {
     id: "math",
@@ -275,7 +309,8 @@ const SUBJECTS = {
     en: "Mathematics",
     icon: "🔢",
     art: "🔢",
-    color: "math"
+    color: "math",
+    say: "audio/km/subject_math.mp3"
   },
   en: {
     id: "en",
@@ -283,7 +318,8 @@ const SUBJECTS = {
     en: "English",
     icon: "A",
     art: "🔤",
-    color: "en"
+    color: "en",
+    say: "audio/km/subject_en.mp3"
   },
   world: {
     id: "world",
@@ -291,7 +327,8 @@ const SUBJECTS = {
     en: "My World",
     icon: "🌍",
     art: "🐘 🍎 ⭐",
-    color: "world"
+    color: "world",
+    say: "audio/km/subject_world.mp3"
   }
 };
 
@@ -368,7 +405,7 @@ function goHome() {
         </div>
       </div>
       <div class="subject-grid">${cardsHtml}</div>
-      <div class="footer-note">Version 1.1 • សិក្សាដោយរីករាយ! 🌈</div>
+      <div class="footer-note">Version 1.2 • សិក្សាដោយរីករាយ! 🌈</div>
     </div>
   `;
 
@@ -434,6 +471,9 @@ function renderSubject(id) {
   $app.querySelector('[data-act="home"]').addEventListener("click", goHome);
   $app.querySelector('[data-act="lesson"]').addEventListener("click", function () { renderLesson(id); });
   $app.querySelector('[data-act="quiz"]').addEventListener("click", function () { startQuiz(id); });
+
+  /* សម្លេងអានឈ្មោះវិជ្ជា ពេលបើកវិជ្ជា */
+  speak(s.say);
 }
 
 /* =====================================================
@@ -441,22 +481,24 @@ function renderSubject(id) {
    ===================================================== */
 function buildLessonSections(id) {
   if (id === "kh") {
-    const sec1 = CONSONANTS.map(function (c) {
+    const sec1 = CONSONANTS.map(function (c, i) {
       return {
         giant: c.l,
         giantClass: "",
         word: c.word + " (" + c.l + ")",
         emoji: c.emoji,
-        en: c.en
+        en: c.en,
+        say: "audio/km/cons" + ("0" + (i + 1)).slice(-2) + ".mp3"
       };
     });
-    const sec2 = VOWELS.map(function (v) {
+    const sec2 = VOWELS.map(function (v, i) {
       return {
         giant: "ក" + v.v,
         giantClass: "",
         word: v.ex,
         emoji: v.emoji,
-        en: v.en
+        en: v.en,
+        say: "audio/km/vow" + ("0" + (i + 1)).slice(-2) + ".mp3"
       };
     });
     const sec3 = KH_NUMS.map(function (k) {
@@ -465,7 +507,8 @@ function buildLessonSections(id) {
         giantClass: "giant-word",
         word: k.word,
         emoji: emojiRow("🍎", k.num),
-        en: "Number " + k.num
+        en: "Number " + k.num,
+        say: "audio/km/num" + ("0" + k.num).slice(-2) + ".mp3"
       };
     });
     return [
@@ -482,7 +525,8 @@ function buildLessonSections(id) {
         giantClass: "giant-word",
         word: k.word,
         emoji: emojiRow("🟡", k.num),
-        en: "Count: " + k.num
+        en: "Count: " + k.num,
+        say: "audio/km/num" + ("0" + k.num).slice(-2) + ".mp3"
       };
     });
     const addPairs = [[1, 1], [2, 1], [2, 2], [3, 2], [3, 3], [4, 2], [5, 2], [4, 4]];
@@ -492,7 +536,8 @@ function buildLessonSections(id) {
         giantClass: "giant-word",
         word: "",
         emoji: `<span class="eqrow">${emojiRow("🍎", p[0])}</span> <span class="formula"><span class="op">+</span></span> <span class="eqrow">${emojiRow("🍎", p[1])}</span>`,
-        en: p[0] + " + " + p[1] + " = " + (p[0] + p[1])
+        en: p[0] + " + " + p[1] + " = " + (p[0] + p[1]),
+        say: "audio/km/add_" + p[0] + "_" + p[1] + ".mp3"
       };
     });
     const subPairs = [[3, 1], [4, 2], [5, 1], [5, 3], [6, 2], [7, 4], [8, 3], [9, 5]];
@@ -502,7 +547,8 @@ function buildLessonSections(id) {
         giantClass: "giant-word",
         word: "",
         emoji: `<span class="eqrow">${emojiRow("🐥", p[0])}</span> <span class="formula"><span class="op">−</span></span> <span class="eqrow">${emojiRow("💨", p[1])}</span>`,
-        en: p[0] + " − " + p[1] + " = " + (p[0] - p[1])
+        en: p[0] + " − " + p[1] + " = " + (p[0] - p[1]),
+        say: "audio/km/sub_" + p[0] + "_" + p[1] + ".mp3"
       };
     });
     return [
@@ -513,17 +559,24 @@ function buildLessonSections(id) {
   }
 
   if (id === "world") {
-    function vcards(list) {
+    function vcards(list, prefix) {
       return list.map(function (x) {
-        return { giant: "", giantClass: "", word: x.word, emoji: x.emoji, en: x.en };
+        return {
+          giant: "",
+          giantClass: "",
+          word: x.word,
+          emoji: x.emoji,
+          en: x.en,
+          say: "audio/km/" + prefix + "_" + x.en.toLowerCase() + ".mp3"
+        };
       });
     }
     return [
-      { title: "សត្វ", cards: vcards(ANIMALS) },
-      { title: "ផ្លែឈើ", cards: vcards(FRUITS) },
-      { title: "រូបរាង", cards: vcards(SHAPES) },
-      { title: "កាយវក្តី", cards: vcards(BODY) },
-      { title: "ថ្ងៃទាំង ៧", cards: vcards(DAYS) }
+      { title: "សត្វ", cards: vcards(ANIMALS, "animal") },
+      { title: "ផ្លែឈើ", cards: vcards(FRUITS, "fruit") },
+      { title: "រូបរាង", cards: vcards(SHAPES, "shape") },
+      { title: "កាយវក្តី", cards: vcards(BODY, "body") },
+      { title: "ថ្ងៃទាំង ៧", cards: vcards(DAYS, "day") }
     ];
   }
 
@@ -534,7 +587,8 @@ function buildLessonSections(id) {
       giantClass: "",
       word: c.word,
       emoji: c.emoji,
-      en: c.l + " — " + c.word
+      en: c.l + " — " + c.word,
+      say: "audio/en/letter_" + c.l.toLowerCase() + ".mp3"
     };
   });
   const sec2 = EN_NUMS.map(function (k) {
@@ -543,7 +597,8 @@ function buildLessonSections(id) {
       giantClass: "giant-word",
       word: k.word,
       emoji: emojiRow("🎈", k.num),
-      en: "Number " + k.num
+      en: "Number " + k.num,
+      say: "audio/en/num_" + k.num + ".mp3"
     };
   });
   const sec3 = EN_COLORS.map(function (c) {
@@ -553,7 +608,8 @@ function buildLessonSections(id) {
       word: c.word + " — " + c.km,
       emoji: c.emoji,
       en: c.word,
-      colorChip: c.css
+      colorChip: c.css,
+      say: ["audio/en/color_" + c.word.toLowerCase() + ".mp3", "audio/km/color_" + c.word.toLowerCase() + ".mp3"]
     };
   });
   return [
@@ -580,6 +636,7 @@ function renderLesson(id) {
     return `
       <div class="lesson-card slide-in">
         <span class="counter">${cardIdx + 1} / ${sec.cards.length}</span>
+        <span class="say-chip">🔊</span>
         ${card.giant ? `<div class="giant ${card.giantClass}">${card.giant}</div>` : ""}
         ${card.word ? `<div class="word">${card.word}</div>` : ""}
         ${emojiHtml}
@@ -637,6 +694,12 @@ function renderLesson(id) {
     const next = $app.querySelector("#nextBtn");
     if (prev) prev.addEventListener("click", function () { goPrev(); });
     if (next) next.addEventListener("click", function () { goNext(); });
+
+    /* សម្លេងអាន៖ លេងដោយស្វ័យប្រវត្តិពេលបើកកាត និងពេលចុចលើកាត */
+    const card = sec.cards[cardIdx];
+    const cardEl = $app.querySelector(".lesson-card");
+    if (cardEl) cardEl.addEventListener("click", function () { speak(card.say); });
+    speak(card.say);
   }
 
   function goNext() {
@@ -963,9 +1026,15 @@ function startQuiz(id) {
 /* =====================================================
    SCREEN: MEMORY GAME (ល្បែងចងចាំ)
    ===================================================== */
+/* emoji → សម្លេងអានពាក្យខ្មែរ (v1.2) */
+const MEM_SAY = {};
+ANIMALS.forEach(function (x) { MEM_SAY[x.emoji] = "audio/km/animal_" + x.en.toLowerCase() + ".mp3"; });
+FRUITS.forEach(function (x) { MEM_SAY[x.emoji] = "audio/km/fruit_" + x.en.toLowerCase() + ".mp3"; });
+
 function goGame() {
   notify("game");
   lessonCtl = null;
+  speak("audio/km/subject_game.mp3");
   const pool = ANIMALS.concat(FRUITS).map(function (x) { return x.emoji; });
   const pairs = shuffle(pool).slice(0, 6);
   const cards = shuffle(pairs.concat(pairs));
@@ -1013,6 +1082,7 @@ function goGame() {
     if (state[i] !== "closed") return;
     ensureAudio();
     state[i] = "open";
+    if (MEM_SAY[cards[i]]) speak(MEM_SAY[cards[i]]);
     if (first === null) { first = i; render(); return; }
 
     moves++;
@@ -1152,7 +1222,7 @@ function renderSettings() {
         </div>
       </div>
       <div class="card row-card">
-        <span style="font-size:16px;">សំឡេង (Sound)</span>
+        <span style="font-size:16px;">សំឡេង &amp; សម្លេងអាន (Sound &amp; Speech)</span>
         <button class="sound-btn ${selSound ? "" : "off2"}" id="soundBtn">${selSound ? "🔊 បើក" : "🔇 បិទ"}</button>
       </div>
       <div class="card">
@@ -1161,7 +1231,7 @@ function renderSettings() {
         <button class="danger-btn" id="resetBtn">🗑 លុបទិន្នន័យទាំងអស់</button>
       </div>
       <button class="save-btn" id="saveBtn">💾 រក្សាទុក (Save)</button>
-      <div class="footer-note">ថ្នាក់មូលដ្ឋាន • Version 1.1</div>
+      <div class="footer-note">ថ្នាក់មូលដ្ឋាន • Version 1.2</div>
     </div>
   `;
 
