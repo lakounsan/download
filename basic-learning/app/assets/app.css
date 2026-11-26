@@ -402,3 +402,20 @@ button { font-family: inherit; border: none; cursor: pointer; outline: none; }
 
 /* bigger emoji-only options in quiz */
 .opt.emoji-opt { font-size: 34px; padding: 20px; }
+
+/* =====================================================
+   v1.2 — សម្លេងអានខ្មែរ (Khmer speech)
+   ===================================================== */
+.lesson-card { position: relative; cursor: pointer; }
+.lesson-card:active { transform: scale(.985); }
+.say-chip {
+  position: absolute; top: 12px; left: 12px;
+  background: #EEF2FF; border: 2px solid #C7D2FE;
+  border-radius: 999px; padding: 7px 11px;
+  font-size: 18px; line-height: 1;
+  animation: pulseSay 1.8s ease infinite;
+}
+@keyframes pulseSay {
+  0%, 100% { transform: scale(1); opacity: .92; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
