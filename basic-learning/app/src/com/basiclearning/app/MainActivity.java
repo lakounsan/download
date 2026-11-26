@@ -43,6 +43,8 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
         s.setLoadsImagesAutomatically(true);
+        // allow bundled speech MP3s to start right when a lesson opens (v1.2)
+        s.setMediaPlaybackRequiresUserGesture(false);
 
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         webView.setWebViewClient(new WebViewClient() {
